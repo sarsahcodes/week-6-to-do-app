@@ -36,38 +36,91 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Fail fast and legibly on bad configuration. Without this, a malformed
-      # AWS_REGION surfaces much later as an opaque DNS error from the OIDC step
-      # ("getaddrinfo ENOTFOUND sts.<region>.amazonaws.com"), which looks like a
-      # network or permissions problem rather than a typo in a repo variable.
+      # Validate every repository variable up front, against the same rules AWS
+      # enforces. A malformed value otherwise surfaces many steps later as an
+      # opaque AWS error that looks like a network or permissions problem rather
+      # than a typo - for example a truncated AWS_REGION becomes
+      # "getaddrinfo ENOTFOUND sts.<region>.amazonaws.com", and a TASK_FAMILY with
+      # a stray character becomes "Family contains invalid characters".
+      #
+      # Surrounding whitespace is stripped and the cleaned values are written back
+      # to the job environment, so a variable pasted with a trailing space works
+      # instead of failing somewhere downstream.
       - name: Verify required repository configuration
         run: |
-          fail() { echo "::error::$*"; exit 1; }
+          RC=0
+          problem() { echo "::error::$*"; RC=1; }
 
-          [ -n "${CONFIG_BUCKET}" ] || fail \
-            "CONFIG_BUCKET repository variable is not set. Set it to the ConfigBucketName stack output."
+          hint() {
+            echo "    Fix it under: Settings > Secrets and variables > Actions > Variables"
+            echo "    Or delete the variable to use the workflow default: $1"
+          }
 
-          [ -n "${ROLE_ARN}" ] || fail \
-            "AWS_ROLE_ARN repository secret is not set. Set it to the GitHubActionsRoleArn stack output."
+          # ---- strip surrounding whitespace, keep the cleaned value ----
+          for v in AWS_REGION ECR_REPOSITORY TASK_FAMILY CONFIG_BUCKET; do
+            raw="$(eval printf '%s' "\"\${$v}\"")"
+            clean="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            if [ "$raw" != "$clean" ]; then
+              echo "::warning::${v} had surrounding whitespace - using the trimmed value '${clean}'."
+            fi
+            printf '%s=%s\n' "$v" "$clean" >> "$GITHUB_ENV"
+            eval "$v=\$clean"
+          done
 
-          # The value is masked in logs, so report only the shape, never the value.
-          case "${ROLE_ARN}" in
-            arn:aws:iam::*:role/*) ;;
-            *) fail "AWS_ROLE_ARN is set but is not an IAM role ARN (expected arn:aws:iam::<account>:role/<name>)." ;;
-          esac
-
-          # AWS region: two or more lowercase letters, a region word, and a digit.
-          # e.g. eu-central-1, us-east-1, ap-southeast-2
-          if ! printf '%s' "${AWS_REGION}" | grep -Eq '^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$'; then
-            echo "::error::AWS_REGION is '${AWS_REGION}', which is not a valid AWS region."
-            echo "Fix the AWS_REGION repository variable under:"
-            echo "  Settings > Secrets and variables > Actions > Variables"
-            echo "A truncated value such as 'eu-central-' is the usual cause."
-            echo "Deleting the variable falls back to the workflow default, eu-central-1."
-            exit 1
+          # ---- AWS_ROLE_ARN (secret; masked in logs, so report shape only) ----
+          if [ -z "${ROLE_ARN}" ]; then
+            problem "AWS_ROLE_ARN secret is not set. Set it to the GitHubActionsRoleArn stack output."
+          else
+            case "${ROLE_ARN}" in
+              arn:aws:iam::*:role/*) ;;
+              *) problem "AWS_ROLE_ARN is set but is not an IAM role ARN (expected arn:aws:iam::<account>:role/<name>)." ;;
+            esac
           fi
 
-          echo "Region=${AWS_REGION}  EcrRepo=${ECR_REPOSITORY}  TaskFamily=${TASK_FAMILY}  ConfigBucket=${CONFIG_BUCKET}"
+          # ---- AWS_REGION: e.g. eu-central-1, us-east-1, ap-southeast-2 ----
+          if ! printf '%s' "${AWS_REGION}" | grep -Eq '^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$'; then
+            problem "AWS_REGION is '${AWS_REGION}', which is not a valid AWS region."
+            echo "    A truncated value such as 'eu-central-' is the usual cause."
+            hint "eu-central-1"
+          fi
+
+          # ---- TASK_FAMILY: ECS allows only letters, numbers, hyphen, underscore ----
+          if ! printf '%s' "${TASK_FAMILY}" | grep -Eq '^[a-zA-Z0-9_-]{1,255}$'; then
+            problem "TASK_FAMILY is '${TASK_FAMILY}', which ECS will reject with 'Family contains invalid characters'."
+            echo "    Only letters, numbers, hyphen and underscore are allowed."
+            echo "    It is the task definition FAMILY NAME only - not an ARN, and no ':revision' suffix."
+            hint "week6-todo"
+          fi
+
+          # ---- ECR_REPOSITORY: lowercase, may contain / . _ - between segments ----
+          # The registry host is added by amazon-ecr-login, so a full URI here would
+          # silently build the wrong image name - reject it explicitly.
+          if printf '%s' "${ECR_REPOSITORY}" | grep -Eq 'amazonaws\.com|^https?://'; then
+            problem "ECR_REPOSITORY is '${ECR_REPOSITORY}', which is a full registry URI."
+            echo "    Use the repository NAME only - the registry host is added automatically."
+            hint "week6-todo"
+          elif ! printf '%s' "${ECR_REPOSITORY}" | grep -Eq '^[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*$'; then
+            problem "ECR_REPOSITORY is '${ECR_REPOSITORY}', which is not a valid ECR repository name."
+            echo "    Lowercase only. It is the repository NAME, not the full registry URI."
+            hint "week6-todo"
+          fi
+
+          # ---- CONFIG_BUCKET: S3 bucket naming rules, name only ----
+          if [ -z "${CONFIG_BUCKET}" ]; then
+            problem "CONFIG_BUCKET is not set. Set it to the ConfigBucketName stack output."
+          elif ! printf '%s' "${CONFIG_BUCKET}" | grep -Eq '^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$'; then
+            problem "CONFIG_BUCKET is '${CONFIG_BUCKET}', which is not a valid S3 bucket name."
+            echo "    Bucket NAME only - no 's3://' prefix and no trailing path."
+          fi
+
+          echo
+          echo "Resolved configuration:"
+          echo "  AWS_REGION     = ${AWS_REGION}"
+          echo "  ECR_REPOSITORY = ${ECR_REPOSITORY}"
+          echo "  TASK_FAMILY    = ${TASK_FAMILY}"
+          echo "  CONFIG_BUCKET  = ${CONFIG_BUCKET}"
+
+          exit $RC
         env:
           ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
