@@ -36,10 +36,40 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify required repository variables
+      # Fail fast and legibly on bad configuration. Without this, a malformed
+      # AWS_REGION surfaces much later as an opaque DNS error from the OIDC step
+      # ("getaddrinfo ENOTFOUND sts.<region>.amazonaws.com"), which looks like a
+      # network or permissions problem rather than a typo in a repo variable.
+      - name: Verify required repository configuration
         run: |
-          : "${CONFIG_BUCKET:?Set the CONFIG_BUCKET repository variable to the ConfigBucketName stack output}"
-          echo "Region=${AWS_REGION}  Repo=${ECR_REPOSITORY}  TaskFamily=${TASK_FAMILY}"
+          fail() { echo "::error::$*"; exit 1; }
+
+          [ -n "${CONFIG_BUCKET}" ] || fail \
+            "CONFIG_BUCKET repository variable is not set. Set it to the ConfigBucketName stack output."
+
+          [ -n "${ROLE_ARN}" ] || fail \
+            "AWS_ROLE_ARN repository secret is not set. Set it to the GitHubActionsRoleArn stack output."
+
+          # The value is masked in logs, so report only the shape, never the value.
+          case "${ROLE_ARN}" in
+            arn:aws:iam::*:role/*) ;;
+            *) fail "AWS_ROLE_ARN is set but is not an IAM role ARN (expected arn:aws:iam::<account>:role/<name>)." ;;
+          esac
+
+          # AWS region: two or more lowercase letters, a region word, and a digit.
+          # e.g. eu-central-1, us-east-1, ap-southeast-2
+          if ! printf '%s' "${AWS_REGION}" | grep -Eq '^[a-z]{2}(-gov)?-[a-z]+-[0-9]+$'; then
+            echo "::error::AWS_REGION is '${AWS_REGION}', which is not a valid AWS region."
+            echo "Fix the AWS_REGION repository variable under:"
+            echo "  Settings > Secrets and variables > Actions > Variables"
+            echo "A truncated value such as 'eu-central-' is the usual cause."
+            echo "Deleting the variable falls back to the workflow default, eu-central-1."
+            exit 1
+          fi
+
+          echo "Region=${AWS_REGION}  EcrRepo=${ECR_REPOSITORY}  TaskFamily=${TASK_FAMILY}  ConfigBucket=${CONFIG_BUCKET}"
+        env:
+          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
