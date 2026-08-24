@@ -71,6 +71,42 @@ jobs:
         env:
           ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
+      # Set the repository variable DEBUG_OIDC=true to print the identity claims
+      # GitHub is presenting. Use this when the OIDC step fails with
+      # "Not authorized to perform sts:AssumeRoleWithWebIdentity" - the "sub"
+      # claim printed here must match the role's trust policy condition.
+      # Only the claims are printed, never the token itself.
+      - name: Debug OIDC claims
+        if: ${{ vars.DEBUG_OIDC == 'true' }}
+        run: |
+          TOKEN=$(curl -sSf \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" \
+            | python3 -c 'import sys,json; print(json.load(sys.stdin)["value"])')
+
+          PAYLOAD=$(printf '%s' "$TOKEN" | cut -d. -f2)
+          # base64url -> base64, then pad
+          PAYLOAD=$(printf '%s' "$PAYLOAD" | tr '_-' '/+')
+          case $(( ${#PAYLOAD} % 4 )) in 2) PAYLOAD="${PAYLOAD}==";; 3) PAYLOAD="${PAYLOAD}=";; esac
+
+          echo "Claims GitHub is presenting to AWS:"
+          printf '%s' "$PAYLOAD" | base64 -d 2>/dev/null > claims.json
+          python3 <<'PY'
+          import json
+          c = json.load(open("claims.json"))
+          keys = ("sub", "aud", "repository", "repository_owner",
+                  "repository_owner_id", "repository_id", "ref")
+          for k in keys:
+              if k in c:
+                  print("  %-20s = %s" % (k, c[k]))
+          print()
+          print("  The role's trust policy must accept the 'sub' value above.")
+          PY
+          rm -f claims.json
+        env:
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${{ env.ACTIONS_ID_TOKEN_REQUEST_TOKEN }}
+          ACTIONS_ID_TOKEN_REQUEST_URL: ${{ env.ACTIONS_ID_TOKEN_REQUEST_URL }}
+
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
