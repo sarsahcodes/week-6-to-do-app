@@ -1,0 +1,115 @@
+name: Build and Deploy
+
+# Push to main -> build the image, render the deploy config, push to ECR.
+# The ECR push fires an EventBridge rule, which starts CodePipeline, which runs
+# a CodeDeploy blue/green deployment onto the ECS service.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+# id-token: write is what makes OIDC possible. No AWS access keys are stored
+# anywhere in this repository.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: build-and-deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-central-1' }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'week6-todo' }}
+  CONFIG_BUCKET: ${{ vars.CONFIG_BUCKET }}
+  TASK_FAMILY: ${{ vars.TASK_FAMILY || 'week6-todo' }}
+  CONTAINER_NAME: app
+
+jobs:
+  build-and-deploy:
+    name: Build image and trigger blue/green deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify required repository variables
+        run: |
+          : "${CONFIG_BUCKET:?Set the CONFIG_BUCKET repository variable to the ConfigBucketName stack output}"
+          echo "Region=${AWS_REGION}  Repo=${ECR_REPOSITORY}  TaskFamily=${TASK_FAMILY}"
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: gha-${{ github.run_id }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
+        run: |
+          IMAGE_URI="$REGISTRY/${ECR_REPOSITORY}"
+          docker build \
+            --cache-from "type=gha" \
+            --cache-to "type=gha,mode=max" \
+            --load \
+            -t "$IMAGE_URI:${GITHUB_SHA}" \
+            -t "$IMAGE_URI:latest" \
+            .
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+
+      # Render taskdef.json from the LIVE task definition that CloudFormation
+      # created, so IAM roles, env vars, secrets and log config always stay in
+      # sync with the infrastructure stack. Nothing is duplicated by hand.
+      - name: Render taskdef.json
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "${TASK_FAMILY}" \
+            --query 'taskDefinition' --output json > full-taskdef.json
+
+          # Strip read-only fields that RegisterTaskDefinition rejects, plant the
+          # <IMAGE1_NAME> placeholder CodeDeploy substitutes, and drop the
+          # bootstrap command/entryPoint so the real image runs its own CMD.
+          jq 'del(.taskDefinitionArn, .revision, .status, .requiresAttributes,
+                  .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
+              | (.containerDefinitions[] | select(.name=="'"${CONTAINER_NAME}"'") | .image) = "<IMAGE1_NAME>"
+              | (.containerDefinitions[] |= del(.command, .entryPoint))' \
+            full-taskdef.json > taskdef.json
+
+          echo "----- taskdef.json -----"
+          cat taskdef.json
+
+      - name: Package and upload config.zip (taskdef + appspec)
+        run: |
+          zip -j config.zip taskdef.json appspec.yaml
+          aws s3 cp config.zip "s3://${CONFIG_BUCKET}/config/config.zip"
+
+      # Pushed LAST, on purpose: the EventBridge rule watches the :latest tag,
+      # so config.zip must already be in S3 when the pipeline starts.
+      - name: Push image to ECR
+        run: |
+          docker push "${IMAGE_URI}:${GITHUB_SHA}"
+          docker push "${IMAGE_URI}:latest"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Image pushed"
+            echo ""
+            echo "- \`${IMAGE_URI}:${GITHUB_SHA}\`"
+            echo "- \`${IMAGE_URI}:latest\`"
+            echo ""
+            echo "EventBridge should now start CodePipeline, which runs the"
+            echo "CodeDeploy blue/green deployment onto the ECS service."
+          } >> "$GITHUB_STEP_SUMMARY"

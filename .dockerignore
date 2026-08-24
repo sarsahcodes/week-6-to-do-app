@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+.git
+.github
+.gitignore
+.gitattributes
+*.md
+appspec.yaml
+taskdef.json
+full-taskdef.json
+config.zip
+.env

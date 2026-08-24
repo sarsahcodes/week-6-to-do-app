@@ -1,0 +1,17 @@
+# CodeDeploy AppSpec for the ECS blue/green deployment.
+#
+# CodeDeploy substitutes <TASK_DEFINITION> with the revision it registers from
+# taskdef.json (rendered by the GitHub Actions workflow from the live task
+# definition that CloudFormation created).
+#
+# ContainerName and ContainerPort must match the task definition and the
+# ALB target-group configuration in the compute stack.
+version: 0.0
+Resources:
+  - TargetService:
+      Type: AWS::ECS::Service
+      Properties:
+        TaskDefinition: "<TASK_DEFINITION>"
+        LoadBalancerInfo:
+          ContainerName: "app"
+          ContainerPort: 3000

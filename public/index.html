@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Week 6 To-Do</title>
+<style>
+  :root {
+    --bg: #0f1420;
+    --panel: #171e2e;
+    --panel-2: #1e2739;
+    --line: #2a3550;
+    --text: #e8edf7;
+    --muted: #92a0bd;
+    --accent: #5b8cff;
+    --cache: #37c98b;
+    --db: #f0a742;
+    --danger: #f2678a;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 20px 64px;
+    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+  header { margin-bottom: 22px; }
+  h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13.5px; }
+
+  .bar {
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 12px 14px; margin: 18px 0;
+    font-size: 13px;
+  }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border-radius: 999px; font-weight: 600;
+    font-size: 12px; letter-spacing: .02em;
+  }
+  .pill.cache { background: rgba(55,201,139,.14); color: var(--cache); }
+  .pill.db    { background: rgba(240,167,66,.14); color: var(--db); }
+  .pill.idle  { background: rgba(146,160,189,.14); color: var(--muted); }
+  .stat { color: var(--muted); }
+  .stat b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .spacer { flex: 1; }
+
+  form.new {
+    display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 14px; margin-bottom: 18px;
+  }
+  input[type=text], textarea {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 10px 12px; font: inherit; width: 100%;
+  }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+    padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  button.ghost { background: transparent; border: 1px solid var(--line); color: var(--muted); font-weight: 500; }
+  button.ghost:hover { color: var(--text); border-color: var(--accent); }
+  button.danger { background: transparent; color: var(--danger); border: 1px solid transparent; padding: 6px 10px; }
+  button.danger:hover { border-color: var(--danger); }
+
+  ul.tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  li.task {
+    display: flex; align-items: flex-start; gap: 12px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 12px 14px;
+  }
+  li.task.done .title { text-decoration: line-through; color: var(--muted); }
+  .task input[type=checkbox] { margin-top: 4px; width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+  .task .body { flex: 1; min-width: 0; }
+  .title { font-weight: 600; word-break: break-word; }
+  .notes { color: var(--muted); font-size: 13.5px; margin-top: 2px; word-break: break-word; }
+  .meta  { color: var(--muted); font-size: 11.5px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .task .actions { display: flex; gap: 4px; }
+
+  .empty { color: var(--muted); text-align: center; padding: 34px; border: 1px dashed var(--line); border-radius: var(--radius); }
+  .err { background: rgba(242,103,138,.12); border: 1px solid var(--danger); color: #ffc9d6;
+         border-radius: var(--radius); padding: 10px 14px; margin-bottom: 14px; font-size: 13.5px; }
+  footer { margin-top: 26px; color: var(--muted); font-size: 12px; text-align: center; }
+  code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  @media (max-width: 640px) { form.new { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Week 6 To-Do</h1>
+    <div class="sub">Writes go to Aurora PostgreSQL through RDS Proxy. Reads are served from ElastiCache for Redis when warm.</div>
+  </header>
+
+  <div id="error" class="err" hidden></div>
+
+  <div class="bar">
+    <span id="source" class="pill idle">idle</span>
+    <span class="stat">latency <b id="latency">–</b></span>
+    <span class="stat">hits <b id="hits">0</b></span>
+    <span class="stat">misses <b id="misses">0</b></span>
+    <span class="stat">hit rate <b id="hitrate">0%</b></span>
+    <span class="spacer"></span>
+    <button class="ghost" id="reload" type="button">Reload</button>
+    <button class="ghost" id="flush" type="button">Flush cache</button>
+  </div>
+
+  <form class="new" id="new-task">
+    <input type="text" id="title" placeholder="What needs doing?" maxlength="200" required>
+    <input type="text" id="notes" placeholder="Notes (optional)" maxlength="500">
+    <button type="submit">Add task</button>
+  </form>
+
+  <ul class="tasks" id="list"></ul>
+  <div class="empty" id="empty" hidden>No tasks yet. Add one above.</div>
+
+  <footer>
+    Reload twice in a row to see the read flip from
+    <code>aurora-via-rds-proxy</code> to <code>redis-cache</code>.
+    Any write invalidates the cache, so the next read is a miss again.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const listEl = $('list'), emptyEl = $('empty'), errEl = $('error');
+
+function showError(msg) {
+  errEl.textContent = msg;
+  errEl.hidden = !msg;
+}
+
+function setSource(source, latencyMs) {
+  const el = $('source');
+  el.className = 'pill ' + (source === 'redis-cache' ? 'cache' : source ? 'db' : 'idle');
+  el.textContent = source === 'redis-cache' ? 'CACHE HIT · Redis'
+                 : source ? 'CACHE MISS · Aurora via RDS Proxy'
+                 : 'idle';
+  $('latency').textContent = latencyMs != null ? latencyMs + ' ms' : '–';
+}
+
+async function api(method, url, body) {
+  const res = await fetch(url, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (res.status === 204) return null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || ('Request failed: ' + res.status));
+  return data;
+}
+
+async function refreshStats() {
+  try {
+    const s = await api('GET', '/api/stats');
+    $('hits').textContent = s.cacheHits;
+    $('misses').textContent = s.cacheMisses;
+    $('hitrate').textContent = s.hitRatePercent + '%';
+  } catch (_) { /* stats are cosmetic */ }
+}
+
+function render(tasks) {
+  listEl.innerHTML = '';
+  emptyEl.hidden = tasks.length > 0;
+  for (const t of tasks) {
+    const li = document.createElement('li');
+    li.className = 'task' + (t.done ? ' done' : '');
+
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = t.done;
+    cb.title = 'Toggle done';
+    cb.addEventListener('change', () => update(t.id, { done: cb.checked }));
+
+    const body = document.createElement('div');
+    body.className = 'body';
+    const title = document.createElement('div');
+    title.className = 'title';
+    title.textContent = t.title;
+    body.appendChild(title);
+    if (t.notes) {
+      const n = document.createElement('div');
+      n.className = 'notes';
+      n.textContent = t.notes;
+      body.appendChild(n);
+    }
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = '#' + t.id + ' · updated ' + new Date(t.updatedAt).toLocaleString();
+    body.appendChild(meta);
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+    const edit = document.createElement('button');
+    edit.className = 'ghost';
+    edit.type = 'button';
+    edit.textContent = 'Edit';
+    edit.addEventListener('click', () => {
+      const nt = prompt('Title', t.title);
+      if (nt === null) return;
+      const nn = prompt('Notes', t.notes || '');
+      if (nn === null) return;
+      update(t.id, { title: nt.trim(), notes: nn.trim() });
+    });
+    const del = document.createElement('button');
+    del.className = 'danger';
+    del.type = 'button';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => {
+      if (confirm('Delete "' + t.title + '"?')) remove(t.id);
+    });
+    actions.append(edit, del);
+
+    li.append(cb, body, actions);
+    listEl.appendChild(li);
+  }
+}
+
+async function load() {
+  try {
+    showError('');
+    const data = await api('GET', '/api/tasks');
+    setSource(data.source, data.latencyMs);
+    render(data.tasks);
+    refreshStats();
+  } catch (err) {
+    showError(err.message);
+  }
+}
+
+async function update(id, patch) {
+  try { await api('PUT', '/api/tasks/' + id, patch); await load(); }
+  catch (err) { showError(err.message); }
+}
+
+async function remove(id) {
+  try { await api('DELETE', '/api/tasks/' + id); await load(); }
+  catch (err) { showError(err.message); }
+}
+
+$('new-task').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = $('title').value.trim();
+  if (!title) return;
+  try {
+    await api('POST', '/api/tasks', { title, notes: $('notes').value.trim() });
+    $('title').value = ''; $('notes').value = '';
+    await load();
+  } catch (err) { showError(err.message); }
+});
+
+$('reload').addEventListener('click', load);
+$('flush').addEventListener('click', async () => {
+  try { await api('POST', '/api/cache/flush'); await load(); }
+  catch (err) { showError(err.message); }
+});
+
+load();
+</script>
+</body>
+</html>

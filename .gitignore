@@ -1,0 +1,6 @@
+node_modules/
+.env
+*.log
+taskdef.json
+full-taskdef.json
+config.zip
