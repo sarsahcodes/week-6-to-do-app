@@ -56,12 +56,21 @@ jobs:
             echo "    Or delete the variable to use the workflow default: $1"
           }
 
-          # ---- strip surrounding whitespace, keep the cleaned value ----
+          # ---- normalise copy-paste artifacts, keep the cleaned value ----
+          # Values pasted out of documentation routinely arrive wrapped in markdown
+          # backticks or quotes, or with a stray space or CR. Strip those rather
+          # than failing on them, and say so.
           for v in AWS_REGION ECR_REPOSITORY TASK_FAMILY CONFIG_BUCKET; do
             raw="$(eval printf '%s' "\"\${$v}\"")"
-            clean="$(printf '%s' "$raw" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            clean="$raw"
+            # repeat: handles `"value"` and similar nestings
+            for _ in 1 2 3; do
+              clean="$(printf '%s' "$clean" | tr -d '\r' \
+                | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+                      -e 's/^[`"'"'"']*//'  -e 's/[`"'"'"']*$//')"
+            done
             if [ "$raw" != "$clean" ]; then
-              echo "::warning::${v} had surrounding whitespace - using the trimmed value '${clean}'."
+              echo "::warning::${v} contained stray characters (whitespace, backticks or quotes) - using '${clean}'."
             fi
             printf '%s=%s\n' "$v" "$clean" >> "$GITHUB_ENV"
             eval "$v=\$clean"
