@@ -4,3 +4,6 @@ node_modules/
 taskdef.json
 full-taskdef.json
 config.zip
+
+# Python bytecode from the CI helper scripts
+__pycache__/

@@ -43,14 +43,27 @@ be set by hand.
 
 ## CI/CD
 
-`.github/workflows/build-and-deploy.yml` runs on every push to `main`:
+`.github/workflows/build-and-deploy.yml` runs on every push to `main`. The
+workflow itself is only the step wiring; the logic lives beside it:
+
+| File | Does |
+|---|---|
+| `.github/workflows/build-and-deploy.yml` | step wiring — OIDC, ECR login, buildx, build/push |
+| `.github/scripts/verify-config.sh` | validates `AWS_REGION`, `ECR_REPOSITORY`, `AWS_ROLE_ARN` before anything touches AWS |
+| `.github/scripts/debug-oidc-claims.py` | prints the OIDC claims GitHub presents, when `DEBUG_OIDC=true` |
+
+What a run does:
 
 1. Assumes an AWS role via **GitHub OIDC** — no long-lived keys in the repo.
 2. Builds the container image.
-3. Renders `taskdef.json` from the live CloudFormation-managed task definition.
-4. Uploads `config.zip` (`taskdef.json` + `appspec.yaml`) to the deploy bucket.
-5. Pushes the image to ECR — which fires the EventBridge rule that starts
-   CodePipeline and the CodeDeploy blue/green deployment.
+3. Pushes it to ECR — which fires the EventBridge rule that starts CodePipeline
+   and the CodeDeploy blue/green deployment.
+
+That is all CI does. `config.zip` (`taskdef.json` + `appspec.yaml`) is rendered
+by the **infrastructure stack** at deploy time, from the task definition
+CloudFormation already owns, and re-rendered automatically whenever that task
+definition changes. CI never reads the live task definition back out of AWS, so
+its role needs neither `ecs:DescribeTaskDefinition` nor `s3:PutObject`.
 
 ### Required repository configuration
 
@@ -59,8 +72,9 @@ be set by hand.
 | Secret | `AWS_ROLE_ARN` | `GitHubActionsRoleArn` stack output |
 | Variable | `AWS_REGION` | `eu-central-1` |
 | Variable | `ECR_REPOSITORY` | `week6-todo` |
-| Variable | `CONFIG_BUCKET` | `ConfigBucketName` stack output |
-| Variable | `TASK_FAMILY` | `week6-todo` |
+
+`CONFIG_BUCKET` and `TASK_FAMILY` are no longer used — the deployment config is
+produced by the stack, not by CI.
 
 ## Running locally
 

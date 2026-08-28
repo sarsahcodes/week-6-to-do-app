@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Scripts run on the Linux runner - always check them out with LF.
+*.sh text eol=lf
+*.py text eol=lf

@@ -1,0 +1,28 @@
+# yamllint configuration.
+#
+# These files are CloudFormation templates / GitHub Actions workflows, not
+# generic YAML, and yamllint's stock style rules disagree with both:
+#
+#   brackets    the short-form intrinsics keep their inline argument lists -
+#               `!Select [ 0, !GetAZs "" ]`, `!If [Cond, A, B]`. That is the
+#               conventional CloudFormation spelling and stays inline; every
+#               other mapping and sequence is written in block form.
+#   line-length 80 is too narrow for ARNs, !Sub expressions and S3 URLs.
+#   document-start  CloudFormation templates conventionally omit the `---`.
+#   truthy      GitHub Actions workflows use `on:` as a key, which yamllint
+#               otherwise reads as the boolean "on".
+#
+# The linter that actually understands these templates is cfn-lint - run that
+# for real findings:  cfn-lint templates/*.yaml
+extends: default
+
+rules:
+  brackets:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  line-length:
+    max: 120
+  document-start: disable
+  comments-indentation: disable
+  truthy:
+    check-keys: false
